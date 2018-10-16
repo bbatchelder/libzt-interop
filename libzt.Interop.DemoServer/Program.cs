@@ -59,7 +59,7 @@ namespace libzt.Interop.DemoServer
                     throw new Exception("Error creating socket");
                 }
 
-                Console.WriteLine("Created socked [{0}]", fd);
+                Console.WriteLine("Created socket [{0}]", fd);
 
                 if ((err = libzt.zts_fcntl(fd, 0, 0)) < 0)
                 {
@@ -153,12 +153,15 @@ namespace libzt.Interop.DemoServer
                         }
                     }  
 
+                    //Poll all the fds from 0 to nfds-1 that are also present in the various FD sets, returning prior to the timeout value;
                     int ret = libzt.zts_select(nfds, ref readfds, ref writefds, ref exceptfds, ref tv);
 
+                    //If ret is zero then no sockets had the matching activity and the timeout elapsed.
+                    //So all we can do is start the loop over again.
                     if (ret == 0)
                         continue;
 
-                    //Service main listener socket
+                    //Service main listener socket if it is ready to be read.
                     if((fdret = libzt.FD_ISSET(fd, ref readfds)) > 0)
                     {
                         int hfd = -1;
@@ -168,20 +171,24 @@ namespace libzt.Interop.DemoServer
                             Console.WriteLine("Error accepting incoming connection.");
                         }
 
+                        //Add this new client socket to our set of active sockets
                         Console.WriteLine("Accepted new connection [{0}]", hfd);
                         libzt.FD_SET(hfd, ref handlerfds);
                     }
 
-                    //Service child handler sockets
+                    //Loop through the possible 32 file descriptors
                     for(int i=0; i<32; i++)
                     {
+                        //If this fd is not an active client FD then continue loop
                         if (libzt.FD_ISSET(i, ref handlerfds) == 0)
                             continue;
 
                         int hfd = i;
 
+                        //If fd is ready to be read, then read it.
                         if((fdret = libzt.FD_ISSET(hfd, ref readfds)) > 0)
                         {
+                            //Have to clear the array or you will potentially get jumbled messages
                             Array.Clear(messageBuffer, 0, messageBuffer.Length);
 
                             err = libzt.zts_read(hfd, messageBuffer, messageBuffer.Length);
@@ -193,6 +200,7 @@ namespace libzt.Interop.DemoServer
                             }
                             else if(err < 0)
                             {
+                                //If there was an error, close the socket and clear it from the handler FD set.
                                 libzt.zts_close(hfd);
                                 libzt.FD_CLR(hfd, ref handlerfds);
                                 Console.WriteLine("Connection [{0}] closed by client.", hfd);
@@ -200,6 +208,9 @@ namespace libzt.Interop.DemoServer
                         }
                     }
                 }
+
+                //If we reached this point, a key has been pressed in the Console
+                //indicating that we need to shut down and exit.
 
                 //Close all handler sockets
                 for (int i = 0; i < 32; i++)
