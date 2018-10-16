@@ -37,6 +37,57 @@ namespace libzt.Interop
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        public struct TIMEVAL
+        {
+            public int tv_sec;
+            public int tv_usec;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct FDSET
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+            public byte[] fd_bits;
+        }
+
+        //#define FD_SET(n, p) ((p)->fd_bits[(n)/8] |= (1 << ((n) & 7)))
+        public static void FD_SET(int fd, ref FDSET set)
+        {
+            int index = fd / 8;
+            byte mask = (byte)(1 << (fd & 7));
+            var newValue = set.fd_bits[index] | mask;
+            set.fd_bits[index] = (byte)newValue;
+        }
+
+        //#define FD_CLR(n, p) ((p)->fd_bits[(n)/8] &= ~(1 << ((n) & 7)))
+        public static void FD_CLR(int fd, ref FDSET set)
+        {
+            int index = fd / 8;
+            byte mask = (byte)(1 << (fd & 7));
+            var newValue = set.fd_bits[index] & ~mask;
+            set.fd_bits[index] = (byte)newValue;
+        }
+
+        //#define FD_ISSET(n,p) ((p)->fd_bits[(n)/8] & (1 << ((n) & 7)))
+        public static int FD_ISSET(int fd, ref FDSET set)
+        {
+            int index = fd / 8;
+            byte mask = (byte)(1 << (fd & 7));
+            var rv = set.fd_bits[index] & mask;
+
+            return rv;
+        }
+
+        //#define FD_ZERO(p) memset((void*)(p),0,sizeof(*(p)))
+        public static void FD_ZERO(ref FDSET set)
+        {
+            if (set.fd_bits == null)
+                set.fd_bits = new byte[4];
+            else
+                Array.Clear(set.fd_bits, 0, set.fd_bits.Length);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         public struct SOCKADDR_STORAGE
         {
             public byte Length;
@@ -103,5 +154,11 @@ namespace libzt.Interop
 
         [DllImport("libzt.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern int zts_accept(int fd, IntPtr addr, int addrlen);
+
+        [DllImport("libzt.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int zts_select(int nfds, [In,Out] ref FDSET readfds, [In, Out] ref FDSET writefds, [In, Out] ref FDSET exceptfds, ref TIMEVAL timeout);
+
+        [DllImport("libzt.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int zts_read(int fd, byte[] buf, int len);
     }
 }

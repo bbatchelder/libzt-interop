@@ -98,20 +98,112 @@ namespace libzt.Interop.DemoServer
                 }
                 Console.WriteLine("Done.");
 
-                int accept_fd = -1;
+                int nfds = 0;
+                var tv = new libzt.TIMEVAL();
+                var readfds = new libzt.FDSET();
+                var writefds = new libzt.FDSET();
+                var exceptds = new libzt.FDSET();
+                var handlerfds = new libzt.FDSET();
 
-                if ((accept_fd = libzt.zts_accept(fd, IntPtr.Zero, 0)) < 0)
+                byte[] messageBuffer = new byte[64];
+
+                int msecs = 250;
+                tv.tv_sec = msecs / 1000;
+                tv.tv_usec = (msecs % 1000) * 1000;
+
+                int fdret = -1;
+                libzt.FD_ZERO(ref handlerfds);
+
+                while (true)
                 {
-                    Console.WriteLine("Error accepting incoming connection.");
+                    if (Console.KeyAvailable)
+                        break;
+
+                    nfds = 0;
+
+                    libzt.FD_ZERO(ref readfds);
+                    libzt.FD_ZERO(ref writefds);
+                    libzt.FD_ZERO(ref exceptds);
+
+                    libzt.FD_SET(fd, ref readfds);
+
+                    for (int i=0; i<32; i++)
+                    {
+                        if (libzt.FD_ISSET(i, ref handlerfds) > 0)
+                        {
+                            libzt.FD_SET(i, ref readfds);
+
+                            if (nfds < i)
+                                nfds = i;
+                        }
+                    }
+
+                    nfds += 1; //TODO: need to verify this is actually needed.  
+
+                    int ret = libzt.zts_select(nfds, ref readfds, ref writefds, ref exceptds, ref tv);
+
+                    if (ret == 0)
+                        continue;
+
+                    //Service main listener socket
+                    if((fdret = libzt.FD_ISSET(fd, ref readfds)) > 0)
+                    {
+                        int hfd = -1;
+
+                        if ((hfd = libzt.zts_accept(fd, IntPtr.Zero, 0)) < 0)
+                        {
+                            Console.WriteLine("Error accepting incoming connection.");
+                        }
+
+                        Console.WriteLine("Accepted new connection [{0}]", hfd);
+                        libzt.FD_SET(hfd, ref handlerfds);
+                    }
+
+                    //Service child handler sockets
+                    for(int i=0; i<32; i++)
+                    {
+                        if (libzt.FD_ISSET(i, ref handlerfds) == 0)
+                            continue;
+
+                        int hfd = i;
+
+                        if((fdret = libzt.FD_ISSET(hfd, ref readfds)) > 0)
+                        {
+                            Array.Clear(messageBuffer, 0, messageBuffer.Length);
+
+                            err = libzt.zts_read(hfd, messageBuffer, messageBuffer.Length);
+
+                            if (err > 0)
+                            {
+                                string msgStr = System.Text.Encoding.UTF8.GetString(messageBuffer, 0, messageBuffer.Length);
+                                Console.WriteLine("[{0}]: {1}", hfd, msgStr);
+                            }
+                            else if(err < 0)
+                            {
+                                libzt.zts_close(hfd);
+                                libzt.FD_CLR(hfd, ref handlerfds);
+                                Console.WriteLine("Connection [{0}] closed by client.", hfd);
+                            }
+                        }
+                    }
                 }
 
-                Console.WriteLine("Press any key to shutdown...");
-                Console.ReadKey();
+                //Close all handler sockets
+                for (int i = 0; i < 32; i++)
+                {
+                    if (libzt.FD_ISSET(i, ref handlerfds) > 0)
+                    {
+                        libzt.zts_close(i);
+                        libzt.FD_CLR(i, ref handlerfds);
+                    }
+                }
+
+                //Close main listening socket
+                libzt.zts_close(fd);
+                //Stop ZeroTier
+                libzt.zts_stop();
 
                 Marshal.FreeHGlobal(addrPtr);
-
-                libzt.zts_close(fd);
-                libzt.zts_stop();
             }
             catch (Exception ex)
             {
