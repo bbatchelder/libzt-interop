@@ -24,12 +24,12 @@ namespace libzt.Interop
         public enum FCNTL_CMDS
         {
             F_GETFL = 3,
-            F_SETFL = 0
+            F_SETFL = 4
         }
 
         public enum FILE_ACCESS_MODES
         {
-            O_NONBLOCK = 0,
+            O_NONBLOCK = 1,
             O_NDELAY = 1,
             O_RDONLY = 2,
             O_WRONLY = 4,

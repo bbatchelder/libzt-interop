@@ -61,10 +61,15 @@ namespace libzt.Interop.DemoServer
 
                 Console.WriteLine("Created socket [{0}]", fd);
 
-                if ((err = libzt.zts_fcntl(fd, 0, 0)) < 0)
+                Console.Write("Trying to set O_NONBLOCK flag on fd [{0}]...", fd);
+                if ((err = libzt.zts_fcntl(fd, (int)libzt.FCNTL_CMDS.F_SETFL, (int)libzt.FILE_ACCESS_MODES.O_NONBLOCK)) < 0)
                 {
                     Console.WriteLine("Error setting O_NONBLOCK on fd.");
                 }
+                Console.WriteLine("Done.");
+
+                err = libzt.zts_fcntl(fd, (int)libzt.FCNTL_CMDS.F_GETFL, (int)libzt.FILE_ACCESS_MODES.O_NONBLOCK);
+                Console.WriteLine("Got back [{0}] from zts_fnctl trying to get the flag value for O_NONBLOCK on fd [{1}].", err, fd);
 
                 string localAddrStr = "0.0.0.0";
                 Int16 localPort = 8008;
@@ -116,12 +121,14 @@ namespace libzt.Interop.DemoServer
                 var handlerfds = new libzt.FDSET();
 
                 //The message buffer used for receiving data.
-                byte[] messageBuffer = new byte[64];
+                byte[] messageBuffer = new byte[8192];
 
                 int fdret = -1;
 
                 //Zero-out the list of handler FDs.
                 libzt.FD_ZERO(ref handlerfds);
+
+                Int64 byteCount = 0;
 
                 while (true)
                 {
@@ -195,7 +202,8 @@ namespace libzt.Interop.DemoServer
 
                             if (err > 0)
                             {
-                                string msgStr = System.Text.Encoding.UTF8.GetString(messageBuffer, 0, messageBuffer.Length);
+                                byteCount += err;
+                                string msgStr = System.Text.Encoding.UTF8.GetString(messageBuffer, 0, err);
                                 Console.WriteLine("[{0}]: {1}", hfd, msgStr);
                             }
                             else if(err < 0)
