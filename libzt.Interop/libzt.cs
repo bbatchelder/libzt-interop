@@ -46,7 +46,7 @@ namespace libzt.Interop
         [StructLayout(LayoutKind.Sequential)]
         public struct FDSET
         {
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1)]
             public byte[] fd_bits;
         }
 
@@ -160,5 +160,8 @@ namespace libzt.Interop
 
         [DllImport("libzt.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern int zts_read(int fd, byte[] buf, int len);
+
+        [DllImport("libzt.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int zts_get_num_assigned_addresses(ulong nwid);
     }
 }

@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
+using System.Security;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -10,8 +12,12 @@ namespace libzt.Interop.DemoServer
 {
     class Program
     {
+        [SecurityCritical]
+        [HandleProcessCorruptedStateExceptions]
         static void Main(string[] args)
         {
+            AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
+
             ulong nwid = 0x35c192ce9bea6859;
 
             int err = 0;
@@ -20,37 +26,55 @@ namespace libzt.Interop.DemoServer
             {
                 Console.WriteLine("Waiting for ZeroTier to come online...");
 
+                GC.Collect();
+
                 if ((err = libzt.zts_startjoin(Environment.CurrentDirectory, nwid)) == 1)
                 {
                     throw new Exception(string.Format("Failed to start/join network [{0:X}]", nwid));
                 }
 
+                GC.Collect();
+
                 Console.WriteLine("Joined network [{0:X}] as node [{1:X}].", nwid, libzt.zts_get_node_id());
+
+                GC.Collect();
 
                 if ((err = libzt.zts_has_address(nwid)) != 1)
                 {
                     throw new Exception("No ZeroTier address assigned.");
                 }
 
+                GC.Collect();
+
                 Console.WriteLine("ZeroTier address assigned.");
 
-                int sockaddr_storage_size = Marshal.SizeOf(typeof(libzt.SOCKADDR_STORAGE));
-                var sockaddr_storage_buffer = new byte[sockaddr_storage_size];
-                GCHandle sockaddr_storage_handle = GCHandle.Alloc(sockaddr_storage_buffer, GCHandleType.Pinned);
-                IntPtr addressStoragePtr = GCHandle.ToIntPtr(sockaddr_storage_handle);
+                //We allocate 4 times as much memory as we should need because somethin is screwy with the structure
+                //and doing this prevents a crash due to memory corruption.
+                IntPtr sockAddrPtr = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(libzt.SOCKADDR_IN)) * 4);
 
-                if ((err = libzt.zts_get_address(nwid, addressStoragePtr, (int)libzt.SockAddrFamily.Inet)) == 0)
+                if ((err = libzt.zts_get_address(nwid, sockAddrPtr, (int)libzt.SockAddrFamily.Inet)) == 0)
                 {
-                    libzt.SOCKADDR_STORAGE addressStorage = Marshal.PtrToStructure<libzt.SOCKADDR_STORAGE>(addressStoragePtr);
-                    var ipbytes = BitConverter.GetBytes(addressStorage.Data2[0]);
+                    libzt.SOCKADDR_IN sockAddr = Marshal.PtrToStructure<libzt.SOCKADDR_IN>(sockAddrPtr);
+                    var ipbytes = BitConverter.GetBytes(sockAddr.Addr);
                     var ip = new IPAddress(ipbytes);
                     Console.WriteLine("ZeroTier address [{0}]", ip);
-                    sockaddr_storage_handle.Free();
+                    Marshal.FreeHGlobal(sockAddrPtr);
                 }
                 else
                 {
                     throw new Exception("Error calling zts_get_address.");
                 }
+
+                int numAddresses = 0;
+                if((numAddresses = libzt.zts_get_num_assigned_addresses(nwid)) < 0)
+                {
+                    throw new Exception("Error calling zts_get_num_assigned_addresses");
+                }
+
+                Console.WriteLine("Bound to [{0}] ZeroTier addresses.", numAddresses);
+
+
+                GC.Collect();
 
                 int fd = -1;
 
@@ -61,17 +85,21 @@ namespace libzt.Interop.DemoServer
 
                 Console.WriteLine("Created socket [{0}]", fd);
 
-                Console.Write("Trying to set O_NONBLOCK flag on fd [{0}]...", fd);
-                if ((err = libzt.zts_fcntl(fd, (int)libzt.FCNTL_CMDS.F_SETFL, (int)libzt.FILE_ACCESS_MODES.O_NONBLOCK)) < 0)
-                {
-                    Console.WriteLine("Error setting O_NONBLOCK on fd.");
-                }
-                Console.WriteLine("Done.");
+                GC.Collect();
 
-                err = libzt.zts_fcntl(fd, (int)libzt.FCNTL_CMDS.F_GETFL, (int)libzt.FILE_ACCESS_MODES.O_NONBLOCK);
-                Console.WriteLine("Got back [{0}] from zts_fnctl trying to get the flag value for O_NONBLOCK on fd [{1}].", err, fd);
+                //Console.Write("Trying to set O_NONBLOCK flag on fd [{0}]...", fd);
+                //if ((err = libzt.zts_fcntl(fd, (int)libzt.FCNTL_CMDS.F_SETFL, (int)libzt.FILE_ACCESS_MODES.O_NONBLOCK)) < 0)
+                //{
+                //    Console.WriteLine("Error setting O_NONBLOCK on fd.");
+                //}
+                //Console.WriteLine("Done.");
+
+                //err = libzt.zts_fcntl(fd, (int)libzt.FCNTL_CMDS.F_GETFL, (int)libzt.FILE_ACCESS_MODES.O_NONBLOCK);
+                //Console.WriteLine("Got back [{0}] from zts_fnctl trying to get the flag value for O_NONBLOCK on fd [{1}].", err, fd);
 
                 string localAddrStr = "0.0.0.0";
+                var ipAny = IPAddress.Parse(localAddrStr);
+
                 Int16 localPort = 8008;
                 var addr = new libzt.SOCKADDR_IN();
                 addr.Family = (byte)libzt.SockAddrFamily.Inet;
@@ -89,6 +117,8 @@ namespace libzt.Interop.DemoServer
                 }
                 Console.WriteLine("Done.");
 
+                GC.Collect();
+
                 //Free unmanaged memory
                 Marshal.FreeHGlobal(addrPtr);
 
@@ -98,6 +128,8 @@ namespace libzt.Interop.DemoServer
                     throw new Exception("Cannot put socket in listening state.");
                 }
                 Console.WriteLine("Done.");
+
+                GC.Collect();
 
                 //Number of file descriptors to check when calling select().  Since fds are zero-based this should
                 //be the highest value fd + 1.
@@ -121,17 +153,26 @@ namespace libzt.Interop.DemoServer
                 var handlerfds = new libzt.FDSET();
 
                 //The message buffer used for receiving data.
-                byte[] messageBuffer = new byte[8192];
+                byte[] messageBuffer = new byte[32768];
 
                 int fdret = -1;
 
                 //Zero-out the list of handler FDs.
                 libzt.FD_ZERO(ref handlerfds);
 
+                Int64 loopCount = 0;
                 Int64 byteCount = 0;
+                Int64 tickCount = DateTime.Now.Ticks;
+                Int64 tickInterval = 10000000;
+
+                GC.Collect();
 
                 while (true)
                 {
+                    loopCount++;
+
+                    GC.Collect();
+
                     if (Console.KeyAvailable)
                         break;
 
@@ -163,6 +204,8 @@ namespace libzt.Interop.DemoServer
                     //Poll all the fds from 0 to nfds-1 that are also present in the various FD sets, returning prior to the timeout value;
                     int ret = libzt.zts_select(nfds, ref readfds, ref writefds, ref exceptfds, ref tv);
 
+                    GC.Collect();
+
                     //If ret is zero then no sockets had the matching activity and the timeout elapsed.
                     //So all we can do is start the loop over again.
                     if (ret == 0)
@@ -183,13 +226,16 @@ namespace libzt.Interop.DemoServer
                         libzt.FD_SET(hfd, ref handlerfds);
                     }
 
+                    int activeConnections = 0;
+
                     //Loop through the possible 32 file descriptors
-                    for(int i=0; i<32; i++)
+                    for(int i=0; i<nfds; i++)
                     {
                         //If this fd is not an active client FD then continue loop
                         if (libzt.FD_ISSET(i, ref handlerfds) == 0)
                             continue;
 
+                        activeConnections++;
                         int hfd = i;
 
                         //If fd is ready to be read, then read it.
@@ -200,25 +246,40 @@ namespace libzt.Interop.DemoServer
 
                             err = libzt.zts_read(hfd, messageBuffer, messageBuffer.Length);
 
+                            GC.Collect();
+
                             if (err > 0)
                             {
                                 byteCount += err;
                                 string msgStr = System.Text.Encoding.UTF8.GetString(messageBuffer, 0, err);
-                                Console.WriteLine("[{0}]: {1}", hfd, msgStr);
+                                //Console.WriteLine("[{0}]: {1}", hfd, msgStr);
+                                //Console.WriteLine("Connection [{0}]: [{1}] bytes received", hfd, byteCount);
+                                
                             }
-                            else if(err < 0)
+                            else if(err <= 0)
                             {
                                 //If there was an error, close the socket and clear it from the handler FD set.
                                 libzt.zts_close(hfd);
                                 libzt.FD_CLR(hfd, ref handlerfds);
-                                Console.WriteLine("Connection [{0}] closed by client.", hfd);
+                                Console.WriteLine("Connection [{0}] closed by client [{1}].", hfd, byteCount);
                             }
                         }
                     }
+
+
+                    Int64 ticksNow = DateTime.Now.Ticks;
+                    if(((ticksNow - tickCount) / tickInterval) > 1)
+                    {
+                        tickCount = ticksNow;
+                        Console.WriteLine("Received [{0:###,###,##0.00}] MBs via [{1}] connections", ((decimal)byteCount / (1024 * 1024)), activeConnections);
+                    }
                 }
+
+                Console.ReadKey();
 
                 //If we reached this point, a key has been pressed in the Console
                 //indicating that we need to shut down and exit.
+                Console.WriteLine("Closing sockets...");
 
                 //Close all handler sockets
                 for (int i = 0; i < 32; i++)
@@ -244,6 +305,13 @@ namespace libzt.Interop.DemoServer
                 Console.WriteLine("Press any key to exit...");
                 Console.ReadKey();
             }
+        }
+
+        [SecurityCritical]
+        [HandleProcessCorruptedStateExceptions]
+        private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            Console.WriteLine(e.ExceptionObject);
         }
     }
 }
